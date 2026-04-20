@@ -1,4 +1,4 @@
-# Лабораторная работа №8: CI для PHP-приложения в контейнере (GitHub Actions)
+# Лабораторная работа №10: Управление секретами в контейнерах
 
 ## Студент: Кроитор Александр
 
@@ -8,172 +8,168 @@
 
 ## Дата: 20-04-2026
 
-## Цель работы: В рамках данной работы студенты научатся настраивать непрерывную интеграцию с помощью Github Actions.
+## Цель работы: Целью работы является знакомство с методами управления секретами в контейнерах.
 
-## Задание: Создать Web приложение, написать тесты для него и настроить непрерывную интеграцию с помощью Github Actions на базе контейнеров.
+## Задание: Создать многосервисное приложение с контейнерами, использующими секреты.
 
 ### Локально вместо Docker использую Podman (аналогичный API, rootless, daemonless)
 
-Важно: в GitHub Actions на `ubuntu-latest` по умолчанию доступен Docker, поэтому workflow использует `docker ...`, а локально я делаю то же самое через `podman ...`.
-
 ```bash
- podman -v
+podman -v
 podman version 5.7.0
 ```
 
-## Структура проекта
+За основу берём лабораторную работу номер 8, создаём docker-compose.yaml
 
-```text
-.
-├── .github/workflows/main.yml
-├── Dockerfile
-├── Justfile
-├── README.md
-├── sql/schema.sql
-├── site/
-│   ├── config.php
-│   ├── index.php
-│   ├── modules/
-│   │   ├── database.php
-│   │   └── page.php
-│   ├── styles/style.css
-│   └── templates/index.tpl
-└── tests/
-    ├── testframework.php
-    └── tests.php
+```yaml
+services:
+  frontend:
+    image: nginx:latest
+    ports:
+      - "80:80"
+    volumes:
+      - ./site:/var/www/html
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
+    networks:
+      - frontend
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      MYSQL_HOST: database
+      MYSQL_DATABASE: my_database
+    secrets:
+      - user
+      - secret
+    networks:
+      - backend
+      - frontend
+  database:
+    image: mariadb:latest
+    environment:
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/root_secret
+      MYSQL_DATABASE: my_database
+      MYSQL_USER_FILE: /run/secrets/user
+      MYSQL_PASSWORD_FILE: /run/secrets/secret
+    secrets:
+      - root_secret
+      - user
+      - secret
+    volumes:
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    networks:
+      - backend
+      - frontend
+
+networks:
+  frontend: {}
+  backend: {}
+
+secrets:
+  root_secret:
+    file: ./secrets/root_secret
+  user:
+    file: ./secrets/user
+  secret:
+    file: ./secrets/secret
 ```
 
-## Выполнение работы
+Изменяем обёртку над Базой данных для работы с MySQL
 
-### 1) Приложение
-
-Сайт реализован в `site/`:
-
-- `site/modules/database.php` — класс `Database` для работы с SQLite (Execute/Fetch/CRUD/Count).
-- `site/modules/page.php` — класс `Page` для рендера HTML по шаблону.
-- `site/index.php` — читает GET-параметр `page`, достаёт запись из БД и рендерит HTML.
-- `site/config.php` — хранит путь к БД (в контейнере это `/var/www/db/db.sqlite` через volume).
-
-### 2) Схема базы
-
-Схема и стартовые данные лежат в `sql/schema.sql` (таблица `page` + 3 записи).
-
-### 3) Тесты
-
-Написаны базовые юнит-тесты:
-
-- `tests/testframework.php` — мини-фреймворк (assert + агрегирование результата).
-- `tests/tests.php` — тесты для всех методов `Database` + проверки `Page::Render()` (в т.ч. escaping HTML).
-
-### 4) Контейнер (Dockerfile)
-
-Контейнер собирается на базе `php:7.4-fpm`, внутри ставится SQLite и расширение `pdo_sqlite`, затем из `sql/schema.sql` готовится файл базы `db.sqlite`:
+Меняем Dockerfile на использование pdo_mysql
 
 ```dockerfile
-FROM docker.io/library/php:7.4-fpm as base
+FROM php:7.4-fpm AS base
 
+# install pdo_mysql extension
 RUN apt-get update && \
-    apt-get install -y sqlite3 libsqlite3-dev && \
-    docker-php-ext-install pdo_sqlite
+    apt-get install -y libzip-dev && \
+    docker-php-ext-install pdo_mysql
 
-VOLUME ["/var/www/db"]
-
-COPY sql/schema.sql /var/www/db/schema.sql
-
-RUN echo "prepare database" && \
-    cat /var/www/db/schema.sql | sqlite3 /var/www/db/db.sqlite && \
-    chmod 777 /var/www/db/db.sqlite && \
-    rm -rf /var/www/db/schema.sql && \
-    echo "database is ready"
-
+# copy site files
 COPY site /var/www/html
 ```
 
-### 5) Локальный запуск тестов (Podman + Justfile)
+Берём конфигурационный файл для nginx из лабораторной номер 7
 
-Для удобства добавлен `Justfile`, который повторяет шаги CI:
+```nginx
+server {
+    listen 80;
+    server_name _;
+    root /var/www/html;
+    index index.php;
+    location / {
+        try_files $uri $uri/ /index.php?$args;
+    }
+    location ~ \.php$ {
+        fastcgi_pass backend:9000;
+        fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        include fastcgi_params;
+    }
+}
+```
+
+Создаём папку secrets
 
 ```bash
-just run-tests
+mkdir secrets && cd secrets && touch root_secret user secret
 ```
 
-Если без `just`, то руками (логика та же, что в CI):
+Прописываем содержимое файлов:
+
+- `root_secret` - пароль суперпользователя
+- `user` - имя пользователя базы данных
+- `secret` - пароль пользователя базы данных
+
+Теперь самое интересное - защита секретов! Вместо передачи паролей через переменные окружения, читаем их из файлов в `/run/secrets/`
+
+Изменяем config.php:
+
+```php
+<?php
+
+$config = [
+    "db" => [
+        "host" => getenv("MYSQL_HOST") ?: "localhost",
+        "database" => getenv("MYSQL_DATABASE") ?: "my_database",
+        "username" => trim(file_get_contents("/run/secrets/user")),
+        "password" => trim(file_get_contents("/run/secrets/secret")),
+    ],
+];
+```
+
+Запускаем всё это дело
 
 ```bash
-podman build -t containers08 .
-podman create --name container --volume database:/var/www/db containers08
-podman cp ./tests container:/var/www/html
-podman start container
-podman exec container php /var/www/html/tests/tests.php
-podman stop container
-podman rm container
+podman-compose up -d
 ```
 
-## CI (GitHub Actions)
+Проверяем что контейнеры работают
 
-Workflow лежит в `.github/workflows/main.yml` и делает следующее: checkout → build → create container + volume → копирует тесты → стартует контейнер → запускает тесты → чистит контейнер.
-
-```yml
-name: CI
-
-on:
-  push:
-    branches:
-      - main
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Build the Docker image
-        run: docker build -t containers08 .
-      - name: Create `container`
-        run: docker create --name container --volume database:/var/www/db containers08
-      - name: Copy tests to the container
-        run: docker cp ./tests container:/var/www/html
-      - name: Up the container
-        run: docker start container
-      - name: Run tests
-        run: docker exec container php /var/www/html/tests/tests.php
-      - name: Stop the container
-        run: docker stop container
-      - name: Remove the container
-        run: docker rm container
+```bash
+podman-compose ps
 ```
 
-## QA time
+Проверяем образ на безопасность
 
-Q: Что такое непрерывная интеграция (CI)?
-
-A: Это практика, когда при каждом изменении кода (push/PR) автоматически запускаются проверки (сборка, тесты, линтеры). Цель — быстро ловить ошибки и не копить проблемы до конца разработки.
-
-Q: Для чего нужны юнит-тесты? Как часто их нужно запускать?
-
-A: Юнит-тесты проверяют отдельные части кода (функции/классы) в изоляции и помогают убедиться, что изменения не сломали существующее поведение. Оптимально запускать их при каждом изменении: локально перед коммитом и автоматически в CI на каждый push/PR.
-
-Q: Что нужно изменить в `.github/workflows/main.yml`, чтобы тесты запускались при каждом Pull Request?
-
-A: Добавить триггер `pull_request` (обычно в main):
-
-```yml
-on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+```bash
+docker scout quickview containers10-backend
 ```
 
-Q: Что добавить в `.github/workflows/main.yml`, чтобы удалять созданные образы после выполнения тестов?
-A: В конец job добавить шаг удаления образа (и при необходимости volume). Чтобы очистка выполнялась даже при падении тестов, лучше добавить `if: always()`:
+QA time
 
-```yml
-- name: Remove image
-  if: always()
-  run: docker rmi -f containers08
-```
+Q: Почему плохо передавать секреты в образ при сборке?
 
-## Выводы
+A: Секреты сохраняются в слоях образа навсегда. Даже если удалить файл в следующем слое, предыдущий слой всё ещё содержит секрет. Любой с доступом к образу может вытащить секреты через `docker history` или распаковку слоёв. При пуше в реестр секреты становятся публичными.
 
-В ходе работы создано PHP-приложение с SQLite, написаны юнит-тесты и настроен CI в GitHub Actions для автоматической сборки контейнера и запуска тестов внутри него.
+Q: Как можно безопасно управлять секретами в контейнерах?
+
+A: Docker/Podman Secrets - встроенный механизм, монтирует секреты в `/run/secrets/`. Внешние системы типа HashiCorp Vault, AWS Secrets Manager. Переменные `*_FILE` которые читают значение из файла вместо прямой передачи. Kubernetes Secrets для k8s окружений.
+
+Q: Как использовать Docker Secrets для управления конфиденциальной информацией?
+
+A: Определяем секреты в секции `secrets` docker-compose.yaml, указывая путь к файлам. Подключаем к сервисам через `secrets: [secret_name]`. В контейнере читаем из `/run/secrets/secret_name`. Для баз данных используем переменные `MYSQL_PASSWORD_FILE` вместо `MYSQL_PASSWORD`. Секреты монтируются в tmpfs и не попадают в образ.
+
+Выводы: Docker Secrets позволяет безопасно передавать конфиденциальные данные в контейнеры без их сохранения в образах или переменных окружения. Секреты монтируются как файлы в `/run/secrets/` и доступны только внутри контейнера во время выполнения, что значительно повышает безопасность приложения.

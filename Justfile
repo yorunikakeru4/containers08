@@ -1,33 +1,24 @@
-IMAGE := "containers08"
-CONTAINER := "container"
-VOLUME := "database"
+IMAGE := "containers10-backend"
 
 default:
     @just --list
 
 build:
-    podman build -t {{ IMAGE }} .
+    podman-compose build
 
-create:
-    podman create --name {{ CONTAINER }} --volume {{ VOLUME }}:/var/www/db {{ IMAGE }}
+up:
+    podman-compose up -d
 
-copy-tests:
-    podman cp ./tests {{ CONTAINER }}:/var/www/html
+down:
+    podman-compose down
 
-start:
-    podman start {{ CONTAINER }}
+logs:
+    podman-compose logs -f
 
-test:
-    podman exec {{ CONTAINER }} php /var/www/html/tests/tests.php
+restart: down up
 
-stop:
-    -podman stop {{ CONTAINER }}
-
-rm:
-    -podman rm {{ CONTAINER }}
-
-run-tests: build create copy-tests start test stop rm
-
-clean: rm
+clean: down
     -podman rmi {{ IMAGE }}
-    -podman volume rm {{ VOLUME }}
+
+scout:
+    docker scout quickview {{ IMAGE }}

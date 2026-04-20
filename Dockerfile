@@ -1,17 +1,9 @@
-FROM docker.io/library/php:7.4-fpm as base
+FROM php:7.4-fpm AS base
 
+# install pdo_mysql extension
 RUN apt-get update && \
-    apt-get install -y sqlite3 libsqlite3-dev && \
-    docker-php-ext-install pdo_sqlite
+    apt-get install -y libzip-dev && \
+    docker-php-ext-install pdo_mysql
 
-VOLUME ["/var/www/db"]
-
-COPY sql/schema.sql /var/www/db/schema.sql
-
-RUN echo "prepare database" && \
-    cat /var/www/db/schema.sql | sqlite3 /var/www/db/db.sqlite && \
-    chmod 777 /var/www/db/db.sqlite && \
-    rm -rf /var/www/db/schema.sql && \
-    echo "database is ready"
-
+# copy site files
 COPY site /var/www/html

@@ -3,9 +3,9 @@ class Database
 {
     // private string $path;
     private PDO $pdo;
-    public function __construct(string $path)
+    public function __construct(string $dsn, string $username, string $password)
     {
-        $this->pdo = new PDO("sqlite:$path");
+        $this->pdo = new PDO($dsn, $username, $password);
         $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     }
     public function Execute(string $query): void

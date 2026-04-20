@@ -1,13 +1,10 @@
 <?php
 
-$defaultDbPath = __DIR__ . "/../db/db.sqlite";
-$dbPath = getenv("DB_PATH");
-if ($dbPath === false || $dbPath === "") {
-    $dbPath = $defaultDbPath;
-}
-
 $config = [
     "db" => [
-        "path" => $dbPath,
+        "host" => getenv("MYSQL_HOST") ?: "localhost",
+        "database" => getenv("MYSQL_DATABASE") ?: "my_database",
+        "username" => trim(file_get_contents("/run/secrets/user")),
+        "password" => trim(file_get_contents("/run/secrets/secret")),
     ],
 ];
